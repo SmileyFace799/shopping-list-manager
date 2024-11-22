@@ -5,5 +5,6 @@ export interface Item {
 
 export interface List {
     name: string;
+    filename: string;
     items: Item[];
 }

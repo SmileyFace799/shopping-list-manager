@@ -2,30 +2,36 @@
   <IonPage>
     <IonHeader :translucent="true">
       <IonToolbar>
-        <IonTitle>{{ listInfo[listFileName] }}</IonTitle>
         <IonButton @click="openMenu" slot="start" fill="clear" color="dark">
           <IonIcon :icon="menuIcon"/>
+        </IonButton>
+        <IonTitle v-if="listFileName">{{ listInfo[listFileName] }}</IonTitle>
+        <IonTitle v-else>(No list selected)</IonTitle>
+        <IonButton v-if="listFileName" @click="deleteList" id="delete-list-button" slot="end" fill="clear" color="danger">
+          Delete list
         </IonButton>
       </IonToolbar>
     </IonHeader>
 
-    <IonContent id="main-content" :fullscreen="true">
+    <IonContent id="main-content" fullscreen>
       <IonRefresher slot="fixed" @ionRefresh="refresh($event)">
         <IonRefresherContent></IonRefresherContent>
       </IonRefresher>
 
-      <IonList>
+      <IonList v-if="listFileName">
+        <IonItem>
+          <IonLabel position="stacked">Add an item</IonLabel>
+          <IonInput v-model="newListItem" @keydown.enter="addItem" type="text" required></IonInput>
+        </IonItem>
         <IonItem :class="'item-container ion-activatable ripple-parent' + (item.checked ? '' : ' unchecked')"
         v-for="item in list" @click="() => itemClicked(item)">
           <IonRippleEffect></IonRippleEffect>
           <div class="dot" slot="start"></div>
-          <p class="item-text">
-            {{ item.name }}
-          </p>
+          <p class="item-text">{{ item.name }}</p>
+          <IonButton v-if="item.checked" @click="e => {removeItem(item); e.stopPropagation();}" slot="end" fill="clear" color="danger">
+            <IonIcon :icon="trashIcon"/>
+          </IonButton>
         </IonItem>
-        <IonItem button @click="saveList">Save list</IonItem>
-        <IonItem button @click="() => loadList('test-list.json')">Load list</IonItem>
-        <IonItem button @click="() => console.log(getOccupiedFileNames())">Print list names to console</IonItem>
       </IonList>
     </IonContent>
 
@@ -70,11 +76,30 @@
         </form>
       </IonContent>
     </IonModal>
+
+    <!-- For some reason, alerts seem inconsitent & sometimes just don't appear, no idea why
+    <IonAlert
+      trigger="delete-list-button"
+      header="Are you sure?"
+      message="Do you want to delete this item?"
+      :buttons="[
+        {
+          text: 'cancel',
+          role: 'cancel'
+        },
+        {
+          text: 'Delete',
+          handler: deleteList
+        }
+      ]">
+    </IonAlert>
+    -->
   </IonPage>
 </template>
 
 <script setup>
 import {
+  IonAlert,
   IonButton,
   IonContent,
   IonHeader,
@@ -94,7 +119,7 @@ import {
 } from '@ionic/vue';
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 import { ref } from 'vue';
-import { menu as menuIcon, add as addIcon, arrowBack as arrowBackIcon } from 'ionicons/icons';
+import { menu as menuIcon, addOutline as addIcon, arrowBack as arrowBackIcon, trash as trashIcon } from 'ionicons/icons';
 
 const listInfoFile = "list-info.json"
 
@@ -102,9 +127,10 @@ const listInfoFile = "list-info.json"
 const listInfo = ref({})
 loadFile(listInfoFile).then(info => listInfo.value = info);
 
-// Initialize the first list
-const list = ref([{name: "Soap", checked: false}, {name: "Butter", checked: true}, {name: "Flour", checked: false}]);
-var listFileName = "test-list.json";
+// Initialize the main screen
+const newListItem = ref("");
+const list = ref([]);
+const listFileName = ref("");
 
 // Initialize the form for creating a new list
 const formIsOpen = ref(false);
@@ -120,7 +146,30 @@ const refresh = (ev) => {
 
 function itemClicked(item) {
   item.checked = !item.checked;
-  saveList()
+  sortList();
+  saveList();
+}
+
+function addItem() {
+  list.value.push({name: newListItem.value, checked: false});
+  newListItem.value = "";
+  sortList();
+  saveList();
+}
+
+function removeItem(item) {
+  list.value = list.value.filter(i => i !== item);
+  saveList();
+}
+
+function sortList() {
+  list.value.sort((item1, item2) => {
+    if (item1.checked != item2.checked) {
+      return item1.checked ? 1 : -1;
+    } else {
+      return item1.name.localeCompare(item2.name);
+    }
+  })
 }
 
 function openMenu() {
@@ -133,14 +182,14 @@ function closeMenu() {
 
 // File functions
 
-async function saveList() {
-  await saveFile(list.value, listFileName)
+function saveList() {
+  saveFile(list.value, listFileName.value)
 }
 
 async function saveFile(object, fileName) {
   try {
     const jsonList = JSON.stringify(object);
-
+  
     await Filesystem.writeFile({
       path: fileName,
       data: jsonList,
@@ -154,7 +203,9 @@ async function saveFile(object, fileName) {
 
 async function loadList(fileName) {
   list.value = await loadFile(fileName);
-  listFileName = fileName;
+  listFileName.value = fileName;
+  sortList();
+
 }
 
 async function loadFile(fileName) {
@@ -164,11 +215,27 @@ async function loadFile(fileName) {
       directory: Directory.Data,
       encoding: Encoding.UTF8
     });
-    return JSON.parse(jsonList.data)
+    return JSON.parse(jsonList.data);
   } catch (e) {
     console.error("Failed to load file: ", e);
-    return {};
+    return [];
   }
+}
+
+function deleteList() {
+  delete listInfo.value[listFileName.value];
+  saveFile(listInfo.value, listInfoFile);
+  deleteFile(listFileName.value);
+
+  list.value = [];
+  listFileName.value = '';
+}
+
+function deleteFile(fileName) {
+  Filesystem.deleteFile({
+    path: fileName,
+    directory: Directory.Data,
+  }).catch(e => console.error("Failed to delete file: ", e))
 }
 
 function getOccupiedFileNames() {
@@ -183,13 +250,13 @@ function makeNewList() {
   var counter = 0;
   
   while (occupiedFilenames.some(name => name.startsWith(baseFileName + counter))) {
-    ++counter;
+    counter++;
   }
 
   const uniqueFileName = baseFileName + counter + ".json";
   listInfo.value[uniqueFileName] = newListName.value;
   saveFile(listInfo.value, listInfoFile);
-  saveFile({}, uniqueFileName).then(() => loadList(uniqueFileName));
+  saveFile([], uniqueFileName).then(() => loadList(uniqueFileName));
 
   closeModal();
 }
